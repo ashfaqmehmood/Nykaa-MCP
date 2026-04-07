@@ -1,0 +1,63 @@
+{
+  "name": "nykaa-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Nykaa — search products, get details, check prices, and analyze ingredients from India's leading beauty retailer",
+  "license": "MIT",
+  "type": "module",
+  "main": "build/index.js",
+  "bin": {
+    "nykaa-mcp-server": "./build/index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/user/nykaa-mcp-server"
+  },
+  "homepage": "https://github.com/user/nykaa-mcp-server#readme",
+  "bugs": {
+    "url": "https://github.com/user/nykaa-mcp-server/issues"
+  },
+  "author": "",
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "nykaa",
+    "beauty",
+    "cosmetics",
+    "skincare",
+    "product-search",
+    "ingredient-analysis",
+    "india",
+    "typescript",
+    "ai",
+    "claude",
+    "llm"
+  ],
+  "files": [
+    "build",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "bun run tsc",
+    "prepublishOnly": "bun run tsc",
+    "dev": "bun run src/index.ts",
+    "start": "bun run build/index.js",
+    "install-browser": "bunx playwright install chromium"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "axios": "^1.9.0",
+    "cheerio": "^1.0.0",
+    "playwright": "^1.52.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}
