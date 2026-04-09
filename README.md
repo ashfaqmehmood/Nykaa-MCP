@@ -1,4 +1,4 @@
-# Nykaa MCP Server
+# nykaa-mcp
 
 MCP server for searching, browsing, and analyzing products on [Nykaa](https://www.nykaa.com) — India's leading beauty and cosmetics retailer. Provides product search, detailed product info, batch price checks, and ingredient analysis through the [Model Context Protocol](https://modelcontextprotocol.io).
 
@@ -7,21 +7,19 @@ MCP server for searching, browsing, and analyzing products on [Nykaa](https://ww
 ### Using bunx (recommended)
 
 ```bash
-bunx nykaa-mcp-server
+bunx nykaa-mcp
 ```
 
 Or with npx:
 
 ```bash
-npx nykaa-mcp-server
+npx nykaa-mcp
 ```
-
-> **First run:** Playwright needs Chromium installed. Run `bunx playwright install chromium` once before first use.
 
 ### Claude Code
 
 ```bash
-claude mcp add nykaa -- bunx nykaa-mcp-server
+claude mcp add nykaa -- bunx nykaa-mcp
 ```
 
 ### Claude Desktop
@@ -33,7 +31,7 @@ Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_
   "mcpServers": {
     "nykaa": {
       "command": "bunx",
-      "args": ["nykaa-mcp-server"]
+      "args": ["nykaa-mcp"]
     }
   }
 }
@@ -48,7 +46,7 @@ Add to your MCP settings:
   "mcpServers": {
     "nykaa": {
       "command": "bunx",
-      "args": ["nykaa-mcp-server"]
+      "args": ["nykaa-mcp"]
     }
   }
 }
@@ -101,33 +99,29 @@ Categorize a product's ingredients into actives, base ingredients, and flags.
 
 Returns: `key_actives`, `base_ingredients`, `notable_flags`, `raw_count`
 
-Detects 48 active ingredients (niacinamide, retinol, hyaluronic acid, vitamin C, etc.) and 26 flagged ingredients (parabens, sulfates, formaldehyde, etc.).
+Detects 48 active ingredients (niacinamide, retinol, hyaluronic acid, vitamin C, etc.) and 24 flagged ingredients (parabens, sulfates, formaldehyde, etc.).
 
 ## How It Works
 
 Nykaa doesn't expose a public API. This server uses a hybrid extraction approach:
 
 1. **JSON API** (fastest) — Nykaa's internal search API returns structured product data directly
-2. **Fast path** — `axios` with browser-like headers for direct HTTP fetching
-3. **Fallback** — Headless Chromium via Playwright when Akamai bot protection blocks direct requests
+2. **HTML fallback** — Native `fetch` with browser-like headers when the API is blocked or returns incomplete data
 
 Data is extracted using a cascading strategy:
 - Internal JSON API (`/nyk/aggregator-gludo/api/search.list`)
-- JSON-LD structured data (`schema.org`)
 - Embedded page state (`__NEXT_DATA__`, `__PRELOADED_STATE__`)
+- JSON-LD structured data (`schema.org`)
 - CSS selector-based DOM parsing
-
-The server uses a **system browser discovery** strategy — it tries your installed Chrome/Edge/Brave before falling back to bundled Chromium. System browsers have real TLS fingerprints that bypass Akamai bot protection.
 
 All outputs are **context-compressed** — no raw HTML, stripped metadata, truncated descriptions — optimized for LLM context windows.
 
 ## Development
 
 ```bash
-git clone https://github.com/user/nykaa-mcp-server.git
-cd nykaa-mcp-server
+git clone https://github.com/ashbuilds/nykaa-mcp.git
+cd nykaa-mcp
 bun install
-bunx playwright install chromium
 bun run build
 ```
 
@@ -138,7 +132,6 @@ bun run build
 | `bun run build` | Compile TypeScript to `build/` |
 | `bun run dev` | Run from source |
 | `bun run start` | Run compiled server |
-| `bun run install-browser` | Install Playwright Chromium |
 
 ### Project Structure
 
@@ -146,24 +139,15 @@ bun run build
 src/
   index.ts       MCP server entry point + tool definitions
   nykaa-api.ts   Core API logic — search, details, prices, ingredients
-  browser.ts     Playwright browser pool + system browser discovery
+  browser.ts     HTTP client with Akamai bypass headers
   cache.ts       In-memory TTL cache with periodic cleanup
   context.ts     Utility functions (truncate, stripHtml, etc.)
   types.ts       TypeScript interfaces
 ```
 
-## Configuration
-
-All optional. The server works out of the box with no configuration.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `NYKAA_BROWSER_PATH` | (auto-detect) | Path to a Chromium-based browser binary |
-
 ## Requirements
 
 - Node.js >= 18 or Bun >= 1.1
-- Chromium browser (installed via `bunx playwright install chromium`)
 
 ## License
 

@@ -50,9 +50,4 @@ export interface IngredientAnalysis {
 
 export type SortOption = "relevance" | "price_asc" | "price_desc" | "discount";
 
-export const SORT_PARAM_MAP: Record<SortOption, string> = {
-  relevance: "relevance_new",
-  price_asc: "price_asc",
-  price_desc: "price_desc",
-  discount: "discount",
-};
+// Sort param map is now internal to nykaa-api.ts

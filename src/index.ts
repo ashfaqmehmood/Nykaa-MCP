@@ -16,7 +16,7 @@ import { compactJson } from "./context.js";
 import { shutdown } from "./browser.js";
 
 const server = new McpServer({
-  name: "nykaa-mcp-server",
+  name: "nykaa-mcp",
   version: "1.0.0",
 });
 
@@ -212,7 +212,7 @@ server.tool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("Nykaa MCP Server running on stdio");
+  console.error("nykaa-mcp running on stdio");
 
   // Graceful shutdown when MCP client disconnects
   process.stdin.on("end", () => {

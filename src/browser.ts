@@ -1,190 +1,82 @@
-// ── Playwright Browser Singleton + Page Pool ──
-
-import { chromium, type Browser, type Page, type BrowserContext } from "playwright";
-import { existsSync } from "fs";
+// ── HTTP Client (native fetch with Akamai bypass) ──
+// Uses sec-fetch headers to pass Akamai bot detection without Playwright.
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-const POOL_SIZE = 3;
-const PAGE_TIMEOUT = 30_000;
+const SEC_FETCH_HEADERS = {
+  "sec-ch-ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"macOS"',
+};
 
-let browser: Browser | null = null;
-let context: BrowserContext | null = null;
-const availablePages: Page[] = [];
-const busyPages = new Set<Page>();
+const COMMON_HEADERS: Record<string, string> = {
+  "User-Agent": USER_AGENT,
+  "Accept-Language": "en-IN,en;q=0.9",
+  Cookie: "countryCode=IN; storeId=nykaa",
+  Referer: "https://www.nykaa.com/",
+  Origin: "https://www.nykaa.com",
+  ...SEC_FETCH_HEADERS,
+};
 
-// Dedicated page that stays on nykaa.com to maintain Akamai cookies
-let cookiePage: Page | null = null;
+const FETCH_TIMEOUT = 15_000;
 
-// ── Browser Discovery ──
-// Nykaa uses Akamai bot protection which blocks Playwright's bundled Chromium.
-// We try system browsers first (they have real TLS/HTTP2 fingerprints).
+/**
+ * Fetch a JSON API endpoint with Akamai-bypassing headers.
+ */
+export async function apiFetch(url: string): Promise<unknown> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
 
-const BROWSER_CANDIDATES: string[] = [
-  // macOS
-  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  "/Applications/Helium.app/Contents/MacOS/Helium",
-  "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-  "/Applications/Chromium.app/Contents/MacOS/Chromium",
-  // Linux
-  "/usr/bin/google-chrome",
-  "/usr/bin/google-chrome-stable",
-  "/usr/bin/chromium-browser",
-  "/usr/bin/chromium",
-  "/usr/bin/brave-browser",
-  "/usr/bin/microsoft-edge",
-];
-
-function findBrowserPath(): string | undefined {
-  // User override via env var
-  const envPath = process.env.NYKAA_BROWSER_PATH;
-  if (envPath && existsSync(envPath)) return envPath;
-
-  for (const candidate of BROWSER_CANDIDATES) {
-    if (existsSync(candidate)) return candidate;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        ...COMMON_HEADERS,
+        Accept: "application/json, text/plain, */*",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+      },
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  } finally {
+    clearTimeout(timer);
   }
-
-  // Fall back to bundled Chromium (may be blocked by Akamai)
-  return undefined;
-}
-
-async function ensureBrowser(): Promise<BrowserContext> {
-  if (context && browser?.isConnected()) return context;
-
-  const executablePath = findBrowserPath();
-  if (executablePath) {
-    console.error(`Using browser: ${executablePath}`);
-  } else {
-    console.error("Using bundled Chromium (may be blocked by Akamai — set NYKAA_BROWSER_PATH if needed)");
-  }
-
-  browser = await chromium.launch({
-    headless: true,
-    executablePath,
-    args: [
-      "--disable-blink-features=AutomationControlled",
-      "--no-sandbox",
-      "--disable-dev-shm-usage",
-    ],
-  });
-
-  context = await browser.newContext({
-    userAgent: USER_AGENT,
-    viewport: { width: 1920, height: 1080 },
-    locale: "en-IN",
-    timezoneId: "Asia/Kolkata",
-    javaScriptEnabled: true,
-  });
-
-  // Pre-create pages
-  for (let i = 0; i < POOL_SIZE; i++) {
-    const page = await context.newPage();
-    page.setDefaultTimeout(PAGE_TIMEOUT);
-    availablePages.push(page);
-  }
-
-  return context;
-}
-
-// ── Page Pool ──
-
-export async function acquirePage(): Promise<Page> {
-  await ensureBrowser();
-
-  // Try to get an available page
-  if (availablePages.length > 0) {
-    const page = availablePages.pop()!;
-    busyPages.add(page);
-    return page;
-  }
-
-  // All pages busy — create a temporary one
-  const page = await context!.newPage();
-  page.setDefaultTimeout(PAGE_TIMEOUT);
-  busyPages.add(page);
-  return page;
-}
-
-export async function releasePage(page: Page): Promise<void> {
-  busyPages.delete(page);
-
-  // Return to pool if below pool size, otherwise close
-  if (availablePages.length < POOL_SIZE) {
-    try {
-      await page.goto("about:blank");
-      availablePages.push(page);
-    } catch {
-      // Page is broken, discard it
-      try { await page.close(); } catch { /* ignore */ }
-    }
-  } else {
-    try { await page.close(); } catch { /* ignore */ }
-  }
-}
-
-// ── In-Browser Fetch (bypasses Akamai) ──
-// Uses a persistent page on nykaa.com so Akamai cookies are present.
-
-async function ensureCookiePage(): Promise<Page> {
-  await ensureBrowser();
-
-  if (cookiePage && !cookiePage.isClosed()) return cookiePage;
-
-  cookiePage = await context!.newPage();
-  cookiePage.setDefaultTimeout(PAGE_TIMEOUT);
-  await cookiePage.goto("https://www.nykaa.com", {
-    waitUntil: "domcontentloaded",
-    timeout: 20_000,
-  });
-
-  return cookiePage;
 }
 
 /**
- * Fetch a URL from within the browser context.
- * The browser has Akamai cookies, so API calls succeed.
+ * Fetch an HTML page with Akamai-bypassing headers.
  */
-export async function browserFetch(url: string): Promise<unknown> {
-  const page = await ensureCookiePage();
-  return page.evaluate(async (fetchUrl: string) => {
-    const res = await fetch(fetchUrl);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
-  }, url);
+export async function pageFetch(url: string): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        ...COMMON_HEADERS,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "sec-fetch-dest": "document",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-site": "none",
+        "sec-fetch-user": "?1",
+      },
+      signal: controller.signal,
+    });
+    if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`);
+    const html = await res.text();
+    if (html.length < 500) throw new Error("Response too short — likely blocked");
+    return html;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-// ── Shutdown ──
-
+/**
+ * No-op shutdown (kept for API compatibility with index.ts).
+ */
 export async function shutdown(): Promise<void> {
-  if (cookiePage) {
-    try { await cookiePage.close(); } catch { /* ignore */ }
-    cookiePage = null;
-  }
-
-  for (const page of [...availablePages, ...busyPages]) {
-    try { await page.close(); } catch { /* ignore */ }
-  }
-  availablePages.length = 0;
-  busyPages.clear();
-
-  if (context) {
-    try { await context.close(); } catch { /* ignore */ }
-    context = null;
-  }
-  if (browser) {
-    try { await browser.close(); } catch { /* ignore */ }
-    browser = null;
-  }
+  // Nothing to clean up — no browser processes
 }
-
-// Graceful shutdown
-process.on("SIGINT", async () => {
-  await shutdown();
-  process.exit(0);
-});
-process.on("SIGTERM", async () => {
-  await shutdown();
-  process.exit(0);
-});

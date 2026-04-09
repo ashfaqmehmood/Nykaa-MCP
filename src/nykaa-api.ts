@@ -1,9 +1,7 @@
 // ── Nykaa Scraping & Data Extraction ──
 
-import axios from "axios";
 import * as cheerio from "cheerio";
-import type { Page } from "playwright";
-import { acquirePage, releasePage, browserFetch } from "./browser.js";
+import { apiFetch, pageFetch } from "./browser.js";
 import { truncate, stripHtml, cleanPrice, calcDiscount } from "./context.js";
 import { cacheGet, cacheSet } from "./cache.js";
 import type {
@@ -14,31 +12,21 @@ import type {
   SortOption,
   ProductVariant,
 } from "./types.js";
-import { SORT_PARAM_MAP } from "./types.js";
 
 // ── Constants ──
 
 const BASE_URL = "https://www.nykaa.com";
 
-const AXIOS_HEADERS = {
-  "User-Agent":
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "en-IN,en;q=0.9",
-  "Accept-Encoding": "gzip, deflate, br",
-  Connection: "keep-alive",
-};
-
-const AXIOS_TIMEOUT = 10_000;
-
 // ── Nykaa JSON API (internal, no auth required) ──
 
 const SEARCH_API = `${BASE_URL}/nyk/aggregator-gludo/api/search.list`;
 
-const API_HEADERS = {
-  ...AXIOS_HEADERS,
-  Accept: "application/json, text/plain, */*",
-  Cookie: "countryCode=IN; storeId=nykaa",
+// Map sort options to API params (omit for relevance — the API defaults to it)
+const SORT_API_MAP: Record<SortOption, string> = {
+  relevance: "",
+  price_asc: "price_asc",
+  price_desc: "price_desc",
+  discount: "discount",
 };
 
 // ── Rate Limiting ──
@@ -87,51 +75,14 @@ const FLAGGED_INGREDIENTS = new Set([
   "sulfate", "sodium lauryl sulfate", "sodium laureth sulfate", "sls", "sles",
   "formaldehyde", "phthalate", "triclosan", "oxybenzone", "hydroquinone",
   "toluene", "lead", "mercury", "mineral oil", "petrolatum",
-  "diethanolamine", "triethanolamine", "dea", "tea",
+  "diethanolamine", "triethanolamine",
   "synthetic fragrance", "artificial color",
 ]);
 
-// ── Axios Fast Path ──
-
-async function fetchWithAxios(url: string): Promise<string | null> {
-  try {
-    await throttle();
-    const res = await axios.get(url, {
-      headers: AXIOS_HEADERS,
-      timeout: AXIOS_TIMEOUT,
-      maxRedirects: 3,
-    });
-    if (res.status === 200 && typeof res.data === "string" && res.data.length > 500) {
-      return res.data;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-// ── Playwright Helpers ──
-
-async function fetchWithPlaywright(url: string): Promise<string> {
-  const page = await acquirePage();
-  try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    // Wait for content to render
-    await page.waitForTimeout(2000);
-    return await page.content();
-  } finally {
-    await releasePage(page);
-  }
-}
+// ── Fetch HTML page (with retry) ──
 
 async function fetchPage(url: string): Promise<string> {
-  return withRetry(async () => {
-    // Try axios first (fast path)
-    const html = await fetchWithAxios(url);
-    if (html) return html;
-    // Fall back to Playwright
-    return fetchWithPlaywright(url);
-  });
+  return withRetry(() => pageFetch(url));
 }
 
 // ── Extraction: Embedded JSON ──
@@ -195,13 +146,19 @@ async function searchViaApi(
       source: "react",
       filter_format: "v2",
       show_searchable_child: "true",
-      sort: SORT_PARAM_MAP[sortBy],
     });
 
-    const data = (await browserFetch(`${SEARCH_API}?${params}`)) as Record<string, unknown>;
+    const sortParam = SORT_API_MAP[sortBy];
+    if (sortParam) params.set("sort", sortParam);
+
+    const data = (await apiFetch(`${SEARCH_API}?${params}`)) as Record<string, unknown>;
     if (data?.status !== "success") return null;
 
     const response = data.response as Record<string, unknown>;
+
+    // Handle redirect responses (e.g. "sunscreen" redirects to a category)
+    if (response?.is_redirection) return null;
+
     const products = response?.products;
     if (!Array.isArray(products)) return null;
 
@@ -242,8 +199,8 @@ export async function searchProducts(
   }
 
   // Fall back to HTML scraping if API is blocked/down
-  const sortParam = SORT_PARAM_MAP[sortBy];
-  const url = `${BASE_URL}/search/result/?q=${encodeURIComponent(query)}&root=search&searchType=Manual&sort=${sortParam}`;
+  const sortParam = SORT_API_MAP[sortBy] || "";
+  const url = `${BASE_URL}/search/result/?q=${encodeURIComponent(query)}&root=search&searchType=Manual${sortParam ? `&sort=${sortParam}` : ""}`;
 
   const html = await fetchPage(url);
   const $ = cheerio.load(html);
@@ -454,7 +411,12 @@ export async function getProductDetails(
 
   let targetUrl: string;
   if (url) {
-    targetUrl = url.startsWith("http") ? url : `${BASE_URL}${url}`;
+    const resolved = url.startsWith("http") ? url : `${BASE_URL}${url}`;
+    const hostname = new URL(resolved).hostname;
+    if (!hostname.endsWith("nykaa.com")) {
+      throw new Error("URL must be a nykaa.com domain.");
+    }
+    targetUrl = resolved;
   } else if (productId) {
     // Try JSON API first to resolve the product URL
     const apiResult = await searchViaApi(productId, 1, "relevance");
@@ -834,10 +796,12 @@ async function fetchPriceViaApi(productId: string): Promise<PriceInfo | null> {
     show_searchable_child: "true",
   });
 
-  const data = (await browserFetch(`${SEARCH_API}?${params}`)) as Record<string, unknown>;
+  const data = (await apiFetch(`${SEARCH_API}?${params}`)) as Record<string, unknown>;
   if (data?.status !== "success") return null;
 
   const response = data.response as Record<string, unknown>;
+  if (response?.is_redirection) return null;
+
   const products = response?.products;
   if (!Array.isArray(products) || products.length === 0) return null;
 
@@ -913,6 +877,12 @@ async function fetchPriceViaHtml(productId: string): Promise<PriceInfo> {
   };
 }
 
+// Word-boundary ingredient match — avoids "tea" matching "stearic acid", etc.
+function matchesIngredient(text: string, term: string): boolean {
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|\\b|\\s)${escaped}(?:\\b|\\s|$)`).test(text);
+}
+
 // ── Tool: Analyze Ingredients ──
 
 export async function analyzeIngredients(
@@ -938,9 +908,9 @@ export async function analyzeIngredients(
     let isActive = false;
     let isFlagged = false;
 
-    // Check against known actives
+    // Check against known actives (word-boundary match to avoid false positives)
     for (const active of KEY_ACTIVES) {
-      if (lower.includes(active)) {
+      if (matchesIngredient(lower, active)) {
         keyActives.push(ingredient.trim());
         isActive = true;
         break;
@@ -950,7 +920,7 @@ export async function analyzeIngredients(
     // Check against flagged ingredients
     if (!isActive) {
       for (const flag of FLAGGED_INGREDIENTS) {
-        if (lower.includes(flag)) {
+        if (matchesIngredient(lower, flag)) {
           notableFlags.push(ingredient.trim());
           isFlagged = true;
           break;
