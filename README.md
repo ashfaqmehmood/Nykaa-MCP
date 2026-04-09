@@ -119,7 +119,7 @@ All outputs are **context-compressed** — no raw HTML, stripped metadata, trunc
 ## Development
 
 ```bash
-git clone https://github.com/ashbuilds/nykaa-mcp.git
+git clone https://github.com/ashfaqmehmood/nykaa-mcp.git
 cd nykaa-mcp
 bun install
 bun run build

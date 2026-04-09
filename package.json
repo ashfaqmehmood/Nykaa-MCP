@@ -10,11 +10,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/ashbuilds/nykaa-mcp"
+    "url": "https://github.com/ashfaqmehmood/nykaa-mcp"
   },
-  "homepage": "https://github.com/ashbuilds/nykaa-mcp#readme",
+  "homepage": "https://github.com/ashfaqmehmood/nykaa-mcp#readme",
   "bugs": {
-    "url": "https://github.com/ashbuilds/nykaa-mcp/issues"
+    "url": "https://github.com/ashfaqmehmood/nykaa-mcp/issues"
   },
   "author": "Ashfaq Mehmood",
   "engines": {
